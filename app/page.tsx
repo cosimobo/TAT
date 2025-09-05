@@ -23,10 +23,22 @@ type SwapRow = {
 
 const ALL_MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
-// util: mostra YYYY-MM-DD come DD-MM-YYYY
+// utili data e cookie
 function fmtDateStr(isoDate: string) {
   const d = new Date(`${isoDate}T00:00:00`)
   return format(d, 'dd-MM-yyyy', { locale: it })
+}
+function setCookie(name: string, value: string, days = 400) {
+  try {
+    const d = new Date()
+    d.setTime(d.getTime() + days*24*60*60*1000)
+    document.cookie = `${name}=${encodeURIComponent(value)}; expires=${d.toUTCString()}; path=/; SameSite=Lax`
+  } catch {}
+}
+function getCookie(name: string) {
+  if (typeof document === 'undefined') return null
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)'))
+  return m ? decodeURIComponent(m[1]) : null
 }
 
 export default function Home() {
@@ -40,11 +52,11 @@ export default function Home() {
   ])
   const [entries, setEntries] = useState<DutyRow[]>([])
 
-  // ✅ inizializza "me" DA localStorage PRIMA del primo render
+  // ✅ inizializza "me" leggendo PRIMA cookie, poi localStorage — niente più reset
   const [me, setMe] = useState<string>(() => {
     if (typeof window === 'undefined') return 'p1'
     try {
-      return localStorage.getItem('tat_me') || 'p1'
+      return getCookie('tat_me') || localStorage.getItem('tat_me') || 'p1'
     } catch {
       return 'p1'
     }
@@ -106,7 +118,7 @@ export default function Home() {
     }
     const { error } = await supabase.from('swaps').insert({
       from_person_id: me,
-      to_person_id: null, // OFFERTA APERTA
+      to_person_id: null,
       date,
       status: 'pending'
     })
@@ -127,7 +139,7 @@ export default function Home() {
       .from('swaps')
       .update({ status: 'accepted', to_person_id: me })
       .eq('id', s.id)
-      .eq('status', 'pending') // guard
+      .eq('status', 'pending')
       .select('id')
 
     if (upd.error) return alert(`Impossibile accettare: ${upd.error.message}`)
@@ -169,6 +181,7 @@ export default function Home() {
                 const v = e.target.value
                 setMe(v)
                 try { localStorage.setItem('tat_me', v) } catch {}
+                setCookie('tat_me', v)
                 if (typeof window !== 'undefined' && window.OneSignal) {
                   const OS = window.OneSignal
                   if (OS.sendTag) OS.sendTag('person', v)
@@ -200,13 +213,14 @@ export default function Home() {
         </div>
       </Card>
 
-      {/* Box notifiche: prompt/stato */}
+      {/* Box notifiche: prompt/stato/diagnostica */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm">
             <div className="font-semibold">Notifiche push</div>
             <div className="text-xs opacity-70">
               Se non vedi il prompt, premi “Abilita notifiche”.
+              Se il permesso è <b>denied</b>, devi sbloccarlo dalle impostazioni del sito nel browser.
             </div>
           </div>
           <div className="flex gap-2">
@@ -221,8 +235,9 @@ export default function Home() {
             <Button onClick={async () => {
               if (typeof window === 'undefined' || !window.OneSignal) return
               const OS = window.OneSignal
+              const supported = await OS.Notifications?.isPushSupported?.()
               const perm = await OS.Notifications?.permission?.()
-              alert(`Permesso notifiche: ${perm ?? 'sconosciuto'}`)
+              alert(`Supporto push: ${supported ? 'sì' : 'no'}\nPermesso: ${perm ?? 'sconosciuto'}`)
             }}>
               Stato permessi
             </Button>
