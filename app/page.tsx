@@ -7,6 +7,16 @@ import { supabase } from '@/lib/supabase'
 import { formatISO } from 'date-fns'
 
 type DutyRow = { date: string; person_id: string }
+type SwapRow = {
+  id: string
+  from_person_id: string
+  to_person_id: string | null
+  date: string
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled'
+  created_at: string
+}
+
+const MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
 export default function Home() {
   const [year, setYear] = useState(new Date().getFullYear())
@@ -17,7 +27,10 @@ export default function Home() {
   ])
   const [entries, setEntries] = useState<DutyRow[]>([])
   const [me, setMe] = useState<string>('p1')
+  const [myInbox, setMyInbox] = useState<SwapRow[]>([])
+  const [myOutbox, setMyOutbox] = useState<SwapRow[]>([])
 
+  // Load duties for the year
   useEffect(() => {
     (async () => {
       const { data } = await supabase
@@ -30,17 +43,101 @@ export default function Home() {
     })()
   }, [year])
 
+  // Load swaps (inbox = open requests from others; outbox = my own)
+  async function refreshSwaps() {
+    const [inbox, outbox] = await Promise.all([
+      supabase
+        .from('swaps')
+        .select('*')
+        .eq('status', 'pending')
+        .neq('from_person_id', me) // requests created by others
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('swaps')
+        .select('*')
+        .eq('from_person_id', me)
+        .order('created_at', { ascending: false })
+    ])
+    if (!inbox.error && inbox.data) setMyInbox(inbox.data as SwapRow[])
+    if (!outbox.error && outbox.data) setMyOutbox(outbox.data as SwapRow[])
+  }
+  useEffect(() => { refreshSwaps() }, [me, year])
+
   async function regenerate() {
     const plan = generateYearAssignments(people, year)
     const payload = plan.map((p) => ({ date: p.date, person_id: p.personId }))
-    await supabase
-      .from('duties')
-      .delete()
-      .gte('date', `${year}-01-01`)
-      .lte('date', `${year}-12-31`)
+    await supabase.from('duties').delete().gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
     const { error } = await supabase.from('duties').insert(payload)
     if (error) alert(error.message)
     else setEntries(payload)
+  }
+
+  // Open swap request (no target). First accept wins.
+  async function requestSwap(date: string) {
+    const current = entries.find((e) => e.date === date)
+    if (!current) return
+    if (current.person_id !== me) {
+      alert('You can only request a swap for a day that is assigned to you.')
+      return
+    }
+    const { error } = await supabase.from('swaps').insert({
+      from_person_id: me,
+      to_person_id: null, // OPEN OFFER
+      date,
+      status: 'pending'
+    })
+    if (error) alert(error.message)
+    else {
+      alert('Open swap created. The first to accept gets it.')
+      refreshSwaps()
+    }
+  }
+
+  // First-come acceptance:
+  // 1) Try to mark the swap accepted & assign yourself as to_person_id — ONLY if it's still pending.
+  // 2) If that succeeds (rowcount==1), update the duty to you.
+  async function acceptSwap(s: SwapRow) {
+    // Prevent accepting your own request; and prevent accepting if you already hold that date.
+    const duty = entries.find(d => d.date === s.date)
+    if (duty?.person_id === me) return alert('You already have this day.')
+    if (s.from_person_id === me) return alert('You cannot accept your own request.')
+
+    const upd = await supabase
+      .from('swaps')
+      .update({ status: 'accepted', to_person_id: me })
+      .eq('id', s.id)
+      .eq('status', 'pending') // FIRST-COME GUARD
+      .select('id')            // to check affected rows
+    if (upd.error) {
+      alert(`Failed to accept: ${upd.error.message}`)
+      return
+    }
+    if (!upd.data || upd.data.length === 0) {
+      alert('Too late — someone else accepted first.')
+      refreshSwaps()
+      return
+    }
+
+    // Now actually switch the duty to me
+    const t1 = await supabase.from('duties').update({ person_id: me }).eq('date', s.date)
+    if (t1.error) {
+      alert(`Marked accepted but failed to update duty: ${t1.error.message}`)
+      return
+    }
+
+    alert('Swap accepted. Duty updated.')
+    setEntries(prev => prev.map(d => d.date === s.date ? { ...d, person_id: me } : d))
+    refreshSwaps()
+  }
+
+  async function declineSwap(s: SwapRow) {
+    // In open-offer model, decline is optional; keep it for feedback.
+    const { error } = await supabase.from('swaps').update({ status: 'declined' }).eq('id', s.id)
+    if (error) alert(error.message)
+    else {
+      alert('Swap declined.')
+      refreshSwaps()
+    }
   }
 
   const today = formatISO(new Date(), { representation: 'date' })
@@ -48,21 +145,15 @@ export default function Home() {
   const next = entries.slice(0, 7)
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Controls */}
       <Card>
-        <div className="grid md:grid-cols-2 gap-3 items-end">
+        <div className="grid md:grid-cols-3 gap-3 items-end">
           <div>
             <div className="text-xs uppercase opacity-60">Who are you?</div>
-            <Select
-              value={me}
-              onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                setMe(e.target.value)
-              }
-            >
+            <Select value={me} onChange={(e: ChangeEvent<HTMLSelectElement>) => setMe(e.target.value)}>
               {people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </Select>
           </div>
@@ -72,66 +163,87 @@ export default function Home() {
               type="number"
               value={year}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setYear(
-                  parseInt(e.target.value || '0') ||
-                    new Date().getFullYear()
-                )
+                setYear(parseInt(e.target.value || '0') || new Date().getFullYear())
               }
             />
           </div>
-          <div className="md:col-span-2">
-            <div className="text-xs uppercase opacity-60 mb-1">
-              People (edit names)
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {people.map((p, idx) => (
-                <Input
-                  key={p.id}
-                  value={p.name}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                    const arr = [...people]
-                    arr[idx] = { ...arr[idx], name: e.target.value }
-                    setPeople(arr)
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="md:col-span-2 flex gap-2">
+          <div className="flex gap-2">
             <Button onClick={regenerate}>Regenerate Year Plan</Button>
+            <Button onClick={refreshSwaps}>Refresh</Button>
           </div>
         </div>
       </Card>
 
+      {/* Today & next days */}
       <Card>
         <div className="text-sm">
           Tonight:{' '}
-          <b>
-            {todayEntry?.person_id
-              ? people.find((p) => p.id === todayEntry.person_id)?.name
-              : '—'}
-          </b>
+          <b>{todayEntry?.person_id ? people.find((p) => p.id === todayEntry.person_id)?.name : '—'}</b>
         </div>
         <div className="text-xs opacity-60">Next days</div>
         <div className="flex gap-2 text-sm flex-wrap">
           {next.map((e) => (
             <div key={e.date} className="px-2 py-1 border rounded">
-              {e.date}:{' '}
-              <b>{people.find((p) => p.id === e.person_id)?.name}</b>
+              {e.date}: <b>{people.find((p) => p.id === e.person_id)?.name}</b>
             </div>
           ))}
         </div>
       </Card>
 
-      <Month
-        year={year}
-        month={new Date().getMonth() + 1}
-        people={people}
-        entries={entries.map((e) => ({
-          date: e.date,
-          personId: e.person_id,
-        }))}
-      />
+      {/* Full year */}
+      <div className="grid md:grid-cols-2 gap-4">
+        {MONTHS.map((m) => (
+          <Month
+            key={m}
+            year={year}
+            month={m}
+            people={people}
+            entries={entries.map((e) => ({ date: e.date, personId: e.person_id }))}
+            onDayClick={requestSwap}
+          />
+        ))}
+      </div>
+
+      {/* Swaps */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <div className="text-sm font-semibold mb-2">Open requests (from others)</div>
+          <div className="space-y-2">
+            {myInbox.length === 0 && <div className="text-xs opacity-60">No open requests.</div>}
+            {myInbox.map((s) => (
+              <div key={s.id} className="border rounded-lg p-2 flex items-center justify-between">
+                <div className="text-sm">
+                  <b>{s.date}</b> — asked by <b>{people.find(p => p.id === s.from_person_id)?.name}</b>{' '}
+                  <span className="text-xs opacity-60">({s.status})</span>
+                </div>
+                <div className="flex gap-2">
+                  {s.status === 'pending' && (
+                    <>
+                      <Button onClick={() => acceptSwap(s)}>Accept (take this day)</Button>
+                      <Button onClick={() => declineSwap(s)}>Decline</Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="text-sm font-semibold mb-2">My requests</div>
+          <div className="space-y-2">
+            {myOutbox.length === 0 && <div className="text-xs opacity-60">No requests created.</div>}
+            {myOutbox.map((s) => (
+              <div key={s.id} className="border rounded-lg p-2 flex items-center justify-between">
+                <div className="text-sm">
+                  <b>{s.date}</b> — waiting for someone to accept{' '}
+                  <span className="text-xs opacity-60">({s.status}{s.to_person_id ? ` → ${people.find(p => p.id === s.to_person_id)?.name}` : ''})</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
     </div>
   )
 }
