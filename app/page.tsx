@@ -69,13 +69,17 @@ export default function Home() {
   // Carica i turni dell'anno
   useEffect(() => {
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('duties')
         .select('*')
         .gte('date', `${year}-01-01`)
         .lte('date', `${year}-12-31`)
         .order('date')
-      if (data) setEntries(data as DutyRow[])
+      if (error) {
+        alert(`Errore caricamento turni: ${error.message}`)
+      } else if (data) {
+        setEntries(data as DutyRow[])
+      }
     })()
   }, [year])
 
@@ -99,13 +103,43 @@ export default function Home() {
   }
   useEffect(() => { refreshSwaps() }, [me, year])
 
+  // ✅ Rigenera piano annuale con UPSERT su 'date' (niente più duplicate key)
   async function regenerate() {
-    const plan = generateYearAssignments(people, year)
-    const payload = plan.map((p) => ({ date: p.date, person_id: p.personId }))
-    await supabase.from('duties').delete().gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
-    const { error } = await supabase.from('duties').insert(payload)
-    if (error) alert(error.message)
-    else setEntries(payload)
+    try {
+      const plan = generateYearAssignments(people, year)
+
+      // dedup sicura
+      const map = new Map<string, { date: string; person_id: string }>()
+      for (const p of plan) map.set(p.date, { date: p.date, person_id: p.personId })
+      const payload = Array.from(map.values())
+
+      // upsert per aggiornare/creare righe per quell'anno
+      const { error: upErr } = await supabase
+        .from('duties')
+        .upsert(payload, { onConflict: 'date' })
+
+      if (upErr) {
+        alert(`Errore upsert: ${upErr.message}`)
+        return
+      }
+
+      // ricarica l'anno dal DB
+      const { data, error: loadErr } = await supabase
+        .from('duties')
+        .select('*')
+        .gte('date', `${year}-01-01`)
+        .lte('date', `${year}-12-31`)
+        .order('date')
+
+      if (loadErr) {
+        alert(`Errore ricarico: ${loadErr.message}`)
+      } else if (data) {
+        setEntries(data as DutyRow[])
+        alert('Piano annuale aggiornato.')
+      }
+    } catch (e: any) {
+      alert(`Errore imprevisto: ${e?.message || String(e)}`)
+    }
   }
 
   // Crea richiesta di cambio turno (offerta aperta)
@@ -262,7 +296,7 @@ export default function Home() {
           <div className="text-xs md:text-sm mt-1 opacity-90">{fmtDateStr(today)}</div>
         </div>
         <div
-          className="rounded-2xl p-6 md:p-8 h-48 md:h-56 bg-blue-500 text-white flex flex-col items-center justify-center text-center shadow-sm"
+          className="rounded-2xl p-6 md:p-8 h-48 md:h-56 bg-blue-500 text-white flex flex-col items-center justify-center text-center shadowsm"
           title="Domani"
         >
           <div className="uppercase tracking-wide text-xs md:text-sm opacity-90">Domani</div>
