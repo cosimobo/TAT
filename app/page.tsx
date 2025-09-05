@@ -8,7 +8,7 @@ import { addDays, format, formatISO } from 'date-fns'
 import { it } from 'date-fns/locale'
 
 declare global {
-  interface Window { OneSignal: any }
+  interface Window { OneSignal: any; ensureTATPush?: () => Promise<void> }
 }
 
 type DutyRow = { date: string; person_id: string }
@@ -52,7 +52,7 @@ export default function Home() {
   ])
   const [entries, setEntries] = useState<DutyRow[]>([])
 
-  // ✅ inizializza "me" leggendo PRIMA cookie, poi localStorage — niente più reset
+  // inizializza "me" leggendo PRIMA cookie, poi localStorage
   const [me, setMe] = useState<string>(() => {
     if (typeof window === 'undefined') return 'p1'
     try {
@@ -220,15 +220,20 @@ export default function Home() {
             <div className="font-semibold">Notifiche push</div>
             <div className="text-xs opacity-70">
               Se non vedi il prompt, premi “Abilita notifiche”.
-              Se il permesso è <b>denied</b>, devi sbloccarlo dalle impostazioni del sito nel browser.
+              Se il permesso è <b>denied</b>, sbloccalo dalle impostazioni del sito (icona lucchetto).
             </div>
           </div>
           <div className="flex gap-2">
-            <Button onClick={() => {
-              if (typeof window === 'undefined' || !window.OneSignal) return
-              const OS = window.OneSignal
-              if (OS.Slidedown?.promptPush) OS.Slidedown.promptPush()
-              else if (OS.Notifications?.requestPermission) OS.Notifications.requestPermission()
+            <Button onClick={async () => {
+              if (typeof window === 'undefined') return
+              if (window.ensureTATPush) {
+                await window.ensureTATPush()
+              } else if (window.OneSignal) {
+                const OS = window.OneSignal
+                if (OS.Slidedown?.promptPush) await OS.Slidedown.promptPush()
+                else if (OS.Notifications?.requestPermission) await OS.Notifications.requestPermission()
+                if (OS.User?.PushSubscription?.optIn) await OS.User.PushSubscription.optIn()
+              }
             }}>
               Abilita notifiche
             </Button>
@@ -237,7 +242,8 @@ export default function Home() {
               const OS = window.OneSignal
               const supported = await OS.Notifications?.isPushSupported?.()
               const perm = await OS.Notifications?.permission?.()
-              alert(`Supporto push: ${supported ? 'sì' : 'no'}\nPermesso: ${perm ?? 'sconosciuto'}`)
+              const opted = await OS.User?.PushSubscription?.optedIn
+              alert(`Supporto push: ${supported ? 'sì' : 'no'}\nPermesso: ${perm ?? 'sconosciuto'}\nOpt-in: ${opted ? 'sì' : 'no'}`)
             }}>
               Stato permessi
             </Button>
