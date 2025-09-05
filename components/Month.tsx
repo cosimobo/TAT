@@ -1,7 +1,7 @@
 'use client'
 import { addDays, endOfMonth, format, formatISO, getDay, startOfMonth } from 'date-fns'
 import { Card } from './ui'
-import { Person } from '@/types'
+import { Person } from '@/lib/rotation'
 
 type Entry = { date: string, personId: string }
 export function Month({ year, month, people, entries, onDayClick } : {

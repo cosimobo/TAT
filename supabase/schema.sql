@@ -17,11 +17,8 @@ create table if not exists swaps (
   created_at timestamptz not null default now()
 );
 
--- Convenience: simple view of today's/tomorrow's assignees
 create or replace view v_upcoming as
-select
-  d.date,
-  d.person_id
+select d.date, d.person_id
 from duties d
 where d.date between current_date and current_date + interval '1 day'
 order by d.date;

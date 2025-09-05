@@ -1,37 +1,26 @@
-# TAT — PWA
-A super-simple installable web app (PWA) to manage night-duty for grandparents.
-- Fixed rotation blocks: **Mon–Tue**, **Wed–Thu**, **Fri–Sun** with **weekly role rotation** across 3 people.
-- Shared month view.
-- One-tap swap requests.
-- Daily reminders via web push (optional).
+# TAT — Tocca A Te
+Minimal PWA to schedule family night duty with weekly-rotating blocks (Mon–Tue, Wed–Thu, Fri–Sun).
 
-## Stack
-- **Next.js 14** + **TailwindCSS**
-- **Supabase** (database + auth [optional]) — free tier is enough
-- **OneSignal** (web push) — optional
+## Deploy
+1) **Supabase**
+- Create project → SQL Editor → run `supabase/schema.sql`
+- Seed:
+```sql
+insert into people (id,name) values
+('p1','John'),('p2','Ale'),('p3','Paola')
+on conflict (id) do update set name=excluded.name;
+```
 
-## Quick Start
-1. Create a Supabase project.
-2. Copy `.env.example` to `.env.local` and fill values.
-3. In Supabase, SQL editor → run `supabase/schema.sql`.
-4. (Optional) Set up OneSignal for web push and put `NEXT_PUBLIC_ONESIGNAL_APP_ID`.
-5. `npm i`, then `npm run dev`.
+2) **Vercel → Environment Variables**
+- `NEXT_PUBLIC_SUPABASE_URL` — Supabase Project URL
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key
+- `NEXT_PUBLIC_TIMEZONE` — `Europe/Rome`
+- (optional) `NEXT_PUBLIC_ONESIGNAL_APP_ID` — for web push
 
-Deploy on Vercel. On iPhone/Android, open URL and **Add to Home Screen**. You now have a standalone app.
+3) **Build**
+- `npm i`
+- `npm run dev` (local) or import repo in Vercel.
 
-## Database Schema
-- `people(id text primary key, name text)` — optional; names can be local, duties store person IDs.
-- `duties(date date primary key, person_id text references people(id))`
-- `swaps(id uuid pk, from_person_id text, to_person_id text, date date, status text, created_at timestamptz)`
-
-## Reminders
-We include stubs for a **daily reminder cron** (17:00 Europe/Rome) using a Supabase Edge Function that sends push notifications via OneSignal to the person on duty for `today` and `tomorrow`.
-
-You must configure:
-- a Supabase scheduled cron to hit the edge function
-- OneSignal Web Push app + site origin
-- import `public/OneSignalSDKWorker.js` (created on postinstall)
-
-## Fairness
-Each week, roles rotate A→B→C. Over the year, weekends are evenly distributed.
-
+Workers already present:
+- `public/OneSignalSDKWorker.js`
+- `public/OneSignalSDKUpdaterWorker.js`

@@ -1,17 +1,14 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, Button, Input, Select } from '@/components/ui'
 import { Month } from '@/components/Month'
-import { generateYearAssignments } from '@/lib/rotation'
-import { formatISO } from 'date-fns'
-import { Person } from '@/types'
+import { generateYearAssignments, Person } from '@/lib/rotation'
 import { supabase } from '@/lib/supabase'
+import { formatISO } from 'date-fns'
 
 type DutyRow = { date: string, person_id: string }
 
 export default function Home() {
-  const [code, setCode] = useState('')
-  const [checked, setChecked] = useState(false)
   const [year, setYear] = useState(new Date().getFullYear())
   const [people, setPeople] = useState<Person[]>([
     { id:'p1', name:'John' },
@@ -21,42 +18,20 @@ export default function Home() {
   const [entries, setEntries] = useState<DutyRow[]>([])
   const [me, setMe] = useState<string>('p1')
 
-  // TODO: replace with real auth; for MVP gate by family code env check via server
-  useEffect(()=>{ setChecked(true) },[])
-
-  // Load from Supabase
   useEffect(()=>{
     (async()=>{
-      const { data, error } = await supabase.from('duties').select('*').gte('date', `${year}-01-01`).lte('date', `${year}-12-31`).order('date')
-      if (!error && data) setEntries(data as DutyRow[])
+      const { data } = await supabase.from('duties').select('*')
+        .gte('date', `${year}-01-01`).lte('date', `${year}-12-31`).order('date')
+      if (data) setEntries(data as DutyRow[])
     })()
   },[year])
 
   async function regenerate() {
-    // push a full year based on current people order
     const plan = generateYearAssignments(people, year)
     const payload = plan.map(p=>({ date: p.date, person_id: p.personId }))
     await supabase.from('duties').delete().gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
     const { error } = await supabase.from('duties').insert(payload)
-    if (error) alert(error.message)
-    else setEntries(payload)
-  }
-
-  async function requestSwap(date: string, to: string) {
-    const { error } = await supabase.from('swaps').insert({
-      from_person_id: me,
-      to_person_id: to,
-      date,
-      status: 'pending'
-    })
-    if (error) alert(error.message); else alert('Swap requested')
-  }
-
-  async function onDayClick(date: string) {
-    // If this day is mine, allow request; else do nothing
-    const row = entries.find(e=>e.date===date)
-    if (!row) return
-    if (row.person_id !== me) return alert('Not your duty — tap only your days to request a swap.')
+    if (error) alert(error.message); else setEntries(payload)
   }
 
   const today = formatISO(new Date(), { representation:'date' })
@@ -77,7 +52,7 @@ export default function Home() {
           <Input type="number" value={year} onChange={e=>setYear(parseInt(e.target.value||'0')||new Date().getFullYear())} />
         </div>
         <div className="md:col-span-2">
-          <div className="text-xs uppercase opacity-60 mb-1">People (tap to edit names)</div>
+          <div className="text-xs uppercase opacity-60 mb-1">People (edit names)</div>
           <div className="grid grid-cols-3 gap-2">
             {people.map((p,idx)=>(
               <Input key={p.id} value={p.name} onChange={e=>{
@@ -107,15 +82,6 @@ export default function Home() {
       month={new Date().getMonth()+1}
       people={people}
       entries={entries.map(e=>({ date:e.date, personId:e.person_id }))}
-      onDayClick={async (date)=>{
-        const who = prompt('Request swap with: type 1,2,3 for John/UncleA/UncleB')
-        if (!who) return
-        const map = { '1':'p1','2':'p2','3':'p3' } as any
-        const to = map[who]
-        if (!to) return
-        await requestSwap(date, to)
-      }}
     />
-
   </div>
 }
