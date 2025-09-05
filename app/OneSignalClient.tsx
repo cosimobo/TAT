@@ -21,7 +21,10 @@ function getCookie(name: string) {
 }
 
 declare global {
-  interface Window { OneSignal: any }
+  interface Window {
+    OneSignal: any
+    ensureTATPush?: () => Promise<void>
+  }
 }
 
 export default function OneSignalClient() {
@@ -42,7 +45,7 @@ export default function OneSignalClient() {
 
           OneSignal.init({ appId })
 
-          // Se abbiamo già l'utente, mandiamo tag "person"
+          // Tag utente se salvato
           try {
             const meCookie = getCookie('tat_me')
             const meLS = localStorage.getItem('tat_me')
@@ -53,16 +56,37 @@ export default function OneSignalClient() {
             }
           } catch {}
 
-          // Prova a mostrare il prompt solo se non è già deciso
-          if (OneSignal.Notifications?.permission) {
-            OneSignal.Notifications.permission().then((perm: string) => {
-              if (perm === 'default') {
-                if (OneSignal.Slidedown?.promptPush) OneSignal.Slidedown.promptPush()
-                else if (OneSignal.Notifications?.requestPermission) OneSignal.Notifications.requestPermission()
-              } else {
-                console.log('[OneSignal] Permission already:', perm)
+          // Funzione globale: chiede permesso e poi opt-in subscription (SDK v16+)
+          window.ensureTATPush = async () => {
+            try {
+              // 1) permesso nativo
+              const current = await OneSignal.Notifications?.permission?.()
+              if (current === 'default') {
+                if (OneSignal.Slidedown?.promptPush) {
+                  await OneSignal.Slidedown.promptPush()
+                } else if (OneSignal.Notifications?.requestPermission) {
+                  await OneSignal.Notifications.requestPermission()
+                }
               }
-            })
+
+              // 2) opt-in della push subscription
+              if (OneSignal?.User?.PushSubscription?.optIn) {
+                await OneSignal.User.PushSubscription.optIn()
+              } else if (OneSignal?.registerForPushNotifications) {
+                await OneSignal.registerForPushNotifications()
+              }
+
+              const supported = await OneSignal.Notifications?.isPushSupported?.()
+              const perm = await OneSignal.Notifications?.permission?.()
+              const opted = await OneSignal.User?.PushSubscription?.optedIn
+              console.log('[OneSignal] supported:', supported, 'permission:', perm, 'optedIn:', opted)
+              if (perm === 'denied') {
+                alert('Le notifiche sono bloccate nel browser. Sbloccale dal lucchetto accanto all’URL e riprova.')
+              }
+            } catch (e) {
+              console.error('[OneSignal] ensureTATPush error:', e)
+              alert('Errore nell’attivazione notifiche. Controlla i permessi del browser.')
+            }
           }
 
           // Log diagnostici
