@@ -33,25 +33,26 @@ export default function Home() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
   const [currentMonth] = useState(now.getMonth() + 1) // 1..12
-  const [people, setPeople] = useState<Person[]>([
+  const [people] = useState<Person[]>([
     { id: 'p1', name: 'John' },
     { id: 'p2', name: 'Ale' },
     { id: 'p3', name: 'Paola' },
   ])
   const [entries, setEntries] = useState<DutyRow[]>([])
-  const [me, setMe] = useState<string>('p1')
+
+  // ✅ inizializza "me" DA localStorage PRIMA del primo render
+  const [me, setMe] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'p1'
+    try {
+      return localStorage.getItem('tat_me') || 'p1'
+    } catch {
+      return 'p1'
+    }
+  })
+
   const [myInbox, setMyInbox] = useState<SwapRow[]>([])
   const [myOutbox, setMyOutbox] = useState<SwapRow[]>([])
   const [showFullYear, setShowFullYear] = useState(false)
-
-  // Carica me da localStorage all'avvio (persistenza utente)
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('tat_me')
-      if (saved) setMe(saved)
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // Carica i turni dell'anno
   useEffect(() => {
