@@ -14,6 +14,12 @@ function loadOneSignalSdk(): Promise<void> {
   })
 }
 
+function getCookie(name: string) {
+  if (typeof document === 'undefined') return null
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)'))
+  return m ? decodeURIComponent(m[1]) : null
+}
+
 declare global {
   interface Window { OneSignal: any }
 }
@@ -29,31 +35,37 @@ export default function OneSignalClient() {
         const OneSignal = window.OneSignal
 
         OneSignal.push(function () {
-          // Path dei service worker (devono esistere in /public)
+          // Service worker paths (devono esistere in /public)
           OneSignal.SERVICE_WORKER_PARAM = { scope: '/' }
           OneSignal.SERVICE_WORKER_PATH = '/OneSignalSDKWorker.js'
           OneSignal.SERVICE_WORKER_UPDATER_PATH = '/OneSignalSDKUpdaterWorker.js'
 
-          // Init
           OneSignal.init({ appId })
 
-          // Mostra prompt al primo avvio (se applicabile)
-          if (OneSignal.Slidedown?.promptPush) {
-            OneSignal.Slidedown.promptPush()
-          } else if (OneSignal.Notifications?.requestPermission) {
-            OneSignal.Notifications.requestPermission()
-          }
-
-          // Se abbiamo salvato l'utente localmente, associa un tag "person"
+          // Se abbiamo già l'utente, mandiamo tag "person"
           try {
-            const me = localStorage.getItem('tat_me')
+            const meCookie = getCookie('tat_me')
+            const meLS = localStorage.getItem('tat_me')
+            const me = meCookie || meLS
             if (me) {
               if (OneSignal.sendTag) OneSignal.sendTag('person', me)
               if (OneSignal.User?.addTag) OneSignal.User.addTag('person', me)
             }
           } catch {}
 
-          // Log diagnostici utili
+          // Prova a mostrare il prompt solo se non è già deciso
+          if (OneSignal.Notifications?.permission) {
+            OneSignal.Notifications.permission().then((perm: string) => {
+              if (perm === 'default') {
+                if (OneSignal.Slidedown?.promptPush) OneSignal.Slidedown.promptPush()
+                else if (OneSignal.Notifications?.requestPermission) OneSignal.Notifications.requestPermission()
+              } else {
+                console.log('[OneSignal] Permission already:', perm)
+              }
+            })
+          }
+
+          // Log diagnostici
           OneSignal.Notifications?.isPushSupported().then((ok: boolean) =>
             console.log('[OneSignal] Push supported:', ok)
           )
