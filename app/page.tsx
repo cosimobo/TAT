@@ -4,7 +4,7 @@ import { Card, Button, Input, Select } from '@/components/ui'
 import { Month } from '@/components/Month'
 import { generateYearAssignments, Person } from '@/lib/rotation'
 import { supabase } from '@/lib/supabase'
-import { formatISO } from 'date-fns'
+import { addDays, formatISO } from 'date-fns'
 
 type DutyRow = { date: string; person_id: string }
 type SwapRow = {
@@ -16,10 +16,12 @@ type SwapRow = {
   created_at: string
 }
 
-const MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
+const ALL_MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
 export default function Home() {
-  const [year, setYear] = useState(new Date().getFullYear())
+  const now = new Date()
+  const [year, setYear] = useState(now.getFullYear())
+  const [currentMonth] = useState(now.getMonth() + 1) // 1..12
   const [people, setPeople] = useState<Person[]>([
     { id: 'p1', name: 'John' },
     { id: 'p2', name: 'Ale' },
@@ -29,6 +31,7 @@ export default function Home() {
   const [me, setMe] = useState<string>('p1')
   const [myInbox, setMyInbox] = useState<SwapRow[]>([])
   const [myOutbox, setMyOutbox] = useState<SwapRow[]>([])
+  const [showFullYear, setShowFullYear] = useState(false)
 
   // Load duties for the year
   useEffect(() => {
@@ -43,14 +46,14 @@ export default function Home() {
     })()
   }, [year])
 
-  // Load swaps (inbox = open requests from others; outbox = my own)
+  // Load swaps (open requests by others + my own)
   async function refreshSwaps() {
     const [inbox, outbox] = await Promise.all([
       supabase
         .from('swaps')
         .select('*')
         .eq('status', 'pending')
-        .neq('from_person_id', me) // requests created by others
+        .neq('from_person_id', me)
         .order('created_at', { ascending: false }),
       supabase
         .from('swaps')
@@ -72,7 +75,7 @@ export default function Home() {
     else setEntries(payload)
   }
 
-  // Open swap request (no target). First accept wins.
+  // Open swap request (no target) — first accept wins
   async function requestSwap(date: string) {
     const current = entries.find((e) => e.date === date)
     if (!current) return
@@ -93,11 +96,8 @@ export default function Home() {
     }
   }
 
-  // First-come acceptance:
-  // 1) Try to mark the swap accepted & assign yourself as to_person_id — ONLY if it's still pending.
-  // 2) If that succeeds (rowcount==1), update the duty to you.
+  // First-come acceptance
   async function acceptSwap(s: SwapRow) {
-    // Prevent accepting your own request; and prevent accepting if you already hold that date.
     const duty = entries.find(d => d.date === s.date)
     if (duty?.person_id === me) return alert('You already have this day.')
     if (s.from_person_id === me) return alert('You cannot accept your own request.')
@@ -106,24 +106,17 @@ export default function Home() {
       .from('swaps')
       .update({ status: 'accepted', to_person_id: me })
       .eq('id', s.id)
-      .eq('status', 'pending') // FIRST-COME GUARD
-      .select('id')            // to check affected rows
-    if (upd.error) {
-      alert(`Failed to accept: ${upd.error.message}`)
-      return
-    }
+      .eq('status', 'pending') // guard
+      .select('id')
+
+    if (upd.error) return alert(`Failed to accept: ${upd.error.message}`)
     if (!upd.data || upd.data.length === 0) {
       alert('Too late — someone else accepted first.')
-      refreshSwaps()
-      return
+      return refreshSwaps()
     }
 
-    // Now actually switch the duty to me
     const t1 = await supabase.from('duties').update({ person_id: me }).eq('date', s.date)
-    if (t1.error) {
-      alert(`Marked accepted but failed to update duty: ${t1.error.message}`)
-      return
-    }
+    if (t1.error) return alert(`Marked accepted but failed to update duty: ${t1.error.message}`)
 
     alert('Swap accepted. Duty updated.')
     setEntries(prev => prev.map(d => d.date === s.date ? { ...d, person_id: me } : d))
@@ -131,18 +124,16 @@ export default function Home() {
   }
 
   async function declineSwap(s: SwapRow) {
-    // In open-offer model, decline is optional; keep it for feedback.
     const { error } = await supabase.from('swaps').update({ status: 'declined' }).eq('id', s.id)
-    if (error) alert(error.message)
-    else {
-      alert('Swap declined.')
-      refreshSwaps()
-    }
+    if (error) alert(error.message); else { alert('Swap declined.'); refreshSwaps() }
   }
 
-  const today = formatISO(new Date(), { representation: 'date' })
+  // Tonight & Tomorrow
+  const today = formatISO(now, { representation: 'date' })
+  const tomorrow = formatISO(addDays(now, 1), { representation: 'date' })
   const todayEntry = entries.find((e) => e.date === today)
-  const next = entries.slice(0, 7)
+  const tomorrowEntry = entries.find((e) => e.date === tomorrow)
+  const nameOf = (id?: string) => people.find(p => p.id === id)?.name ?? '—'
 
   return (
     <div className="space-y-6">
@@ -151,7 +142,10 @@ export default function Home() {
         <div className="grid md:grid-cols-3 gap-3 items-end">
           <div>
             <div className="text-xs uppercase opacity-60">Who are you?</div>
-            <Select value={me} onChange={(e: ChangeEvent<HTMLSelectElement>) => setMe(e.target.value)}>
+            <Select
+              value={me}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => setMe(e.target.value)}
+            >
               {people.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -169,42 +163,34 @@ export default function Home() {
           </div>
           <div className="flex gap-2">
             <Button onClick={regenerate}>Regenerate Year Plan</Button>
-            <Button onClick={refreshSwaps}>Refresh</Button>
+            <Button onClick={() => setShowFullYear(s => !s)}>
+              {showFullYear ? 'Hide full year' : 'Show full year'}
+            </Button>
           </div>
         </div>
       </Card>
 
-      {/* Today & next days */}
-      <Card>
-        <div className="text-sm">
-          Tonight:{' '}
-          <b>{todayEntry?.person_id ? people.find((p) => p.id === todayEntry.person_id)?.name : '—'}</b>
-        </div>
-        <div className="text-xs opacity-60">Next days</div>
-        <div className="flex gap-2 text-sm flex-wrap">
-          {next.map((e) => (
-            <div key={e.date} className="px-2 py-1 border rounded">
-              {e.date}: <b>{people.find((p) => p.id === e.person_id)?.name}</b>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Full year */}
+      {/* TONIGHT / TOMORROW tiles */}
       <div className="grid md:grid-cols-2 gap-4">
-        {MONTHS.map((m) => (
-          <Month
-            key={m}
-            year={year}
-            month={m}
-            people={people}
-            entries={entries.map((e) => ({ date: e.date, personId: e.person_id }))}
-            onDayClick={requestSwap}
-          />
-        ))}
+        <div
+          className="rounded-2xl p-6 md:p-8 h-48 md:h-56 bg-green-500 text-white flex flex-col items-center justify-center text-center shadow-sm"
+          title="Tonight"
+        >
+          <div className="uppercase tracking-wide text-xs md:text-sm opacity-90">Tonight</div>
+          <div className="text-2xl md:text-3xl font-extrabold mt-1">{nameOf(todayEntry?.person_id)}</div>
+          <div className="text-xs md:text-sm mt-1 opacity-90">{today}</div>
+        </div>
+        <div
+          className="rounded-2xl p-6 md:p-8 h-48 md:h-56 bg-blue-500 text-white flex flex-col items-center justify-center text-center shadow-sm"
+          title="Tomorrow"
+        >
+          <div className="uppercase tracking-wide text-xs md:text-sm opacity-90">Tomorrow</div>
+          <div className="text-2xl md:text-3xl font-extrabold mt-1">{nameOf(tomorrowEntry?.person_id)}</div>
+          <div className="text-xs md:text-sm mt-1 opacity-90">{tomorrow}</div>
+        </div>
       </div>
 
-      {/* Swaps */}
+      {/* Swaps BEFORE calendar */}
       <div className="grid md:grid-cols-2 gap-4">
         <Card>
           <div className="text-sm font-semibold mb-2">Open requests (from others)</div>
@@ -213,7 +199,7 @@ export default function Home() {
             {myInbox.map((s) => (
               <div key={s.id} className="border rounded-lg p-2 flex items-center justify-between">
                 <div className="text-sm">
-                  <b>{s.date}</b> — asked by <b>{people.find(p => p.id === s.from_person_id)?.name}</b>{' '}
+                  <b>{s.date}</b> — asked by <b>{nameOf(s.from_person_id)}</b>{' '}
                   <span className="text-xs opacity-60">({s.status})</span>
                 </div>
                 <div className="flex gap-2">
@@ -237,13 +223,40 @@ export default function Home() {
               <div key={s.id} className="border rounded-lg p-2 flex items-center justify-between">
                 <div className="text-sm">
                   <b>{s.date}</b> — waiting for someone to accept{' '}
-                  <span className="text-xs opacity-60">({s.status}{s.to_person_id ? ` → ${people.find(p => p.id === s.to_person_id)?.name}` : ''})</span>
+                  <span className="text-xs opacity-60">
+                    ({s.status}{s.to_person_id ? ` → ${nameOf(s.to_person_id)}` : ''})
+                  </span>
                 </div>
               </div>
             ))}
           </div>
         </Card>
       </div>
+
+      {/* Current month in plain sight */}
+      <Month
+        year={year}
+        month={currentMonth}
+        people={people}
+        entries={entries.map((e) => ({ date: e.date, personId: e.person_id }))}
+        onDayClick={requestSwap}
+      />
+
+      {/* Full year (toggle) */}
+      {showFullYear && (
+        <div className="grid md:grid-cols-2 gap-4">
+          {ALL_MONTHS.filter(m => m !== currentMonth).map((m) => (
+            <Month
+              key={m}
+              year={year}
+              month={m}
+              people={people}
+              entries={entries.map((e) => ({ date: e.date, personId: e.person_id }))}
+              onDayClick={requestSwap}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
