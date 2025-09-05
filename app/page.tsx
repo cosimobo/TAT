@@ -7,6 +7,10 @@ import { supabase } from '@/lib/supabase'
 import { addDays, format, formatISO } from 'date-fns'
 import { it } from 'date-fns/locale'
 
+declare global {
+  interface Window { OneSignal: any }
+}
+
 type DutyRow = { date: string; person_id: string }
 type SwapRow = {
   id: string
@@ -21,7 +25,6 @@ const ALL_MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
 // util: mostra YYYY-MM-DD come DD-MM-YYYY
 function fmtDateStr(isoDate: string) {
-  // forza mezzanotte locale per evitare problemi di timezone
   const d = new Date(`${isoDate}T00:00:00`)
   return format(d, 'dd-MM-yyyy', { locale: it })
 }
@@ -40,6 +43,15 @@ export default function Home() {
   const [myInbox, setMyInbox] = useState<SwapRow[]>([])
   const [myOutbox, setMyOutbox] = useState<SwapRow[]>([])
   const [showFullYear, setShowFullYear] = useState(false)
+
+  // Carica me da localStorage all'avvio (persistenza utente)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('tat_me')
+      if (saved) setMe(saved)
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Carica i turni dell'anno
   useEffect(() => {
@@ -152,7 +164,16 @@ export default function Home() {
             <div className="text-xs uppercase opacity-60">Chi sei?</div>
             <Select
               value={me}
-              onChange={(e: ChangeEvent<HTMLSelectElement>) => setMe(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                const v = e.target.value
+                setMe(v)
+                try { localStorage.setItem('tat_me', v) } catch {}
+                if (typeof window !== 'undefined' && window.OneSignal) {
+                  const OS = window.OneSignal
+                  if (OS.sendTag) OS.sendTag('person', v)
+                  if (OS.User?.addTag) OS.User.addTag('person', v)
+                }
+              }}
             >
               {people.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -173,6 +194,36 @@ export default function Home() {
             <Button onClick={regenerate}>Rigenera piano annuale</Button>
             <Button onClick={() => setShowFullYear(s => !s)}>
               {showFullYear ? 'Nascondi anno intero' : 'Mostra anno intero'}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Box notifiche: prompt/stato */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm">
+            <div className="font-semibold">Notifiche push</div>
+            <div className="text-xs opacity-70">
+              Se non vedi il prompt, premi “Abilita notifiche”.
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => {
+              if (typeof window === 'undefined' || !window.OneSignal) return
+              const OS = window.OneSignal
+              if (OS.Slidedown?.promptPush) OS.Slidedown.promptPush()
+              else if (OS.Notifications?.requestPermission) OS.Notifications.requestPermission()
+            }}>
+              Abilita notifiche
+            </Button>
+            <Button onClick={async () => {
+              if (typeof window === 'undefined' || !window.OneSignal) return
+              const OS = window.OneSignal
+              const perm = await OS.Notifications?.permission?.()
+              alert(`Permesso notifiche: ${perm ?? 'sconosciuto'}`)
+            }}>
+              Stato permessi
             </Button>
           </div>
         </div>
